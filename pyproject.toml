@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "aioclamd"
-version = "1.0.0"
+version = "1.1.0"
 description = "Asynchronous client for virus scanning with ClamAV"
 authors = ["Henrik Blidh <henrik.blidh@swedwise.se>"]
 homepage = "https://github.com/swedwise/aioclamd"
@@ -20,7 +20,7 @@ classifiers = [
 ]
 
 [tool.poetry.dependencies]
-python = "^3.7"
+python = ">=3.10"
 
 [tool.poetry.group.lint.dependencies]
 black = "^22.8.0"

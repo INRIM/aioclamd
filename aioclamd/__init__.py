@@ -1,13 +1,19 @@
 import asyncio
-import pkg_resources
 import re
 import struct
 from typing import Union, BinaryIO
 
 try:
-    __version__ = pkg_resources.get_distribution("aioclamd").version
-except:  # noqa
+    from importlib.metadata import version, PackageNotFoundError
+except ImportError:  # Python < 3.8
+    from importlib_metadata import version, PackageNotFoundError  # type: ignore
+
+
+try:
+    __version__ = version("aioclamd")
+except PackageNotFoundError:
     __version__ = ""
+
 scan_response = re.compile(
     r"^(?P<path>.*): ((?P<virus>.+) )?(?P<status>(FOUND|OK|ERROR))$"
 )
@@ -43,33 +49,15 @@ def _parse_response(msg):
 
 
 class _AsyncClamdNetworkSocket:
-    """This class is a context manager helper to make Clamd calls.
-
-    The socket can be used for only one call,
-    so it has to be closed and a new one opened for all requests.
-    Use it like this:
-
-    .. code-block::
-
-        async with _AsyncClamdNetworkSocket(host, port) as socket:
-            socket.basic_command("PING")
-
-    """
+    """Context manager helper to make Clamd calls."""
 
     def __init__(
         self,
         host: str = "127.0.0.1",
         port: int = 3310,
     ):
-        """Initialize the _AsyncClamdNetworkSocket
-
-        host (string) : hostname or ip address
-        port (int) : TCP port
-        """
-
         self.host = host
         self.port = port
-
         self.reader: Union[asyncio.StreamReader, None] = None
         self.writer: Union[asyncio.StreamWriter, None] = None
 
@@ -86,33 +74,25 @@ class _AsyncClamdNetworkSocket:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         try:
-            self.writer.close()
-            await self.writer.wait_closed()
-        except Exception as e:  # noqa
+            if self.writer:
+                self.writer.close()
+                await self.writer.wait_closed()
+        except Exception:
             pass
 
     async def basic_command(self, command):
-        """
-        Send a command to the clamav server, and return the reply.
-        """
         await self.send_command(command)
         response = (await self.recv_response()).rsplit("ERROR", 1)
         if len(response) > 1:
             raise ResponseError(response[0])
-        else:
-            return response[0]
+        return response[0]
 
     async def send_command(self, cmd, *args):
-        """
-        `man clamd` recommends to prefix commands with z, but we will use \n
-        terminated strings, as python<->clamd has some problems with \0x00
-        """
         cmd_to_send = f"n{cmd}{' ' + ' '.join(args) if args else ''}\n".encode("utf-8")
         self.writer.write(cmd_to_send)
         await self.writer.drain()
 
     async def recv_response(self) -> str:
-        """Receive data from clamd"""
         try:
             line = await self.reader.read()
             return line.decode("utf-8").strip()
@@ -121,53 +101,32 @@ class _AsyncClamdNetworkSocket:
 
 
 class ClamdAsyncClient:
-    """
-    Class for using clamd through a network socket.
-    """
+    """Class for using clamd through a network socket."""
 
     def __init__(
         self, host: str = "127.0.0.1", port: int = 3310, timeout: float = None
     ):
-        """Initialize the AsyncClamdNetworkSocket
-
-        host (string) : hostname or ip address
-        port (int) : TCP port
-        timeout (float or None) : socket timeout
-        """
-
         self.host = host
         self.port = port
         self.timeout = timeout
 
     async def instream(self, buffer: BinaryIO) -> dict:
-        """Scan a buffer
-
-        buff (filelikeobj): buffer to scan
-
-        return:
-          - (dict): ``{filename1: ("virusname", "status")}``
-
-        May raise :
-          - BufferTooLongError: if the buffer size exceeds clamd limits
-          - ConnectionError: in case of communication problem
-
-        """
         async with _AsyncClamdNetworkSocket(self.host, self.port) as socket:
             await socket.send_command("INSTREAM")
 
-            # MUST be < StreamMaxLength in /etc/clamav/clamd.conf
             chunk_size = 1024
             chunk = buffer.read(chunk_size)
             while chunk:
                 size = struct.pack(b"!L", len(chunk))
                 socket.writer.write(size + chunk)
+                await socket.writer.drain()
                 chunk = buffer.read(chunk_size)
 
             socket.writer.write(struct.pack(b"!L", 0))
 
             result = await socket.recv_response()
 
-            if len(result) > 0:
+            if result:
                 if result == "INSTREAM size limit exceeded. ERROR":
                     raise BufferTooLongError(result)
 
@@ -175,17 +134,6 @@ class ClamdAsyncClient:
                 return {filename: (status, reason)}
 
     async def _file_system_scan(self, command, file):
-        """Scan a file or directory given by filename using multiple threads
-        (faster on SMP machines). Do not stop on error or virus found.
-        Scan with archive support enabled.
-
-        file (string): filename or directory (MUST BE ABSOLUTE PATH !)
-
-        return:
-          - (dict): {filename1: ('FOUND', 'virusname'),
-                     filename2: ('ERROR', 'reason')}
-
-        """
         async with _AsyncClamdNetworkSocket(self.host, self.port) as socket:
             await socket.send_command(command, file)
             dr = {}
@@ -194,10 +142,7 @@ class ClamdAsyncClient:
                 if result:
                     filename, reason, status = _parse_response(result)
                     dr[filename] = (status, reason)
-
             return dr
-
-    # Convenience methods
 
     async def ping(self):
         async with _AsyncClamdNetworkSocket(self.host, self.port) as socket:
@@ -212,7 +157,6 @@ class ClamdAsyncClient:
             return await socket.basic_command("RELOAD")
 
     async def shutdown(self):
-        """Force Clamd to shutdown and exit"""
         async with _AsyncClamdNetworkSocket(self.host, self.port) as socket:
             return await socket.basic_command("SHUTDOWN")
 
