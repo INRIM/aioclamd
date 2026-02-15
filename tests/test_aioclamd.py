@@ -54,7 +54,7 @@ async def test_multiscan_filesystem():
 @pytest.mark.asyncio
 async def test_instream_eicar(eicar):
     clamd = ClamdAsyncClient()
-    assert await clamd.instream(eicar) == {"stream": ("FOUND", "Win.Test.EICAR_HDB-1")}
+    assert await clamd.instream(eicar) == {"stream": ("FOUND", "Eicar-Test-Signature")}
 
 
 @pytest.mark.asyncio
