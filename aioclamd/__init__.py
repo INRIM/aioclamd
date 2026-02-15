@@ -8,7 +8,6 @@ try:
 except ImportError:  # Python < 3.8
     from importlib_metadata import version, PackageNotFoundError  # type: ignore
 
-
 try:
     __version__ = version("aioclamd")
 except PackageNotFoundError:
